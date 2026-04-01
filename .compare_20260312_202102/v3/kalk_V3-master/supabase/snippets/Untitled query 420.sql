@@ -1,0 +1,1 @@
+SELECT DISTINCT jsonb_object_keys(synthesis_data->'mapped_ai_data') FROM vehicle_synthesis;
