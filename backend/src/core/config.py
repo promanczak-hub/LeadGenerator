@@ -11,6 +11,8 @@ class Config:
     SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
     GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp")
+    ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+    LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini") # 'gemini' or 'anthropic'
 
     # Email settings
     GMAIL_SENDER = os.getenv("GMAIL_SENDER", "")
@@ -49,9 +51,6 @@ class Config:
         "KRS_INDUSTRIES",
         "41.20.Z,42.11.Z,42.12.Z,42.13.Z,42.21.Z,42.22.Z,42.91.Z,42.99.Z,43.11.Z,43.12.Z".strip(),
     ).split(",")
-
-    # Tavily
-    TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 
 
 config = Config()

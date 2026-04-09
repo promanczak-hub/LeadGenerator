@@ -31,6 +31,10 @@ jobs:
       - name: Configure Docker
         run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
+      - name: Fix Python Imports
+        run: |
+          find backend/src -name "*.py" -exec sed -i 's/from src\./from /g' {} +
+
       - name: Build and Push Backend
         run: |
           docker build -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/backend:${{ github.sha }} ./backend
@@ -46,8 +50,9 @@ jobs:
             SUPABASE_URL=${{ secrets.SUPABASE_URL }}
             SUPABASE_KEY=${{ secrets.SUPABASE_KEY }}
             GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+            ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
+            LLM_PROVIDER=${{ secrets.LLM_PROVIDER }}
             REJESTR_IO_KEY=${{ secrets.REJESTR_IO_KEY }}
-            TAVILY_API_KEY=${{ secrets.TAVILY_API_KEY }}
             GMAIL_SENDER=${{ secrets.GMAIL_SENDER }}
             GMAIL_APP_PASSWORD=${{ secrets.GMAIL_APP_PASSWORD }}
 

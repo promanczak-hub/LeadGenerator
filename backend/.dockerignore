@@ -10,6 +10,6 @@ __pycache__
 *.pyd
 .env
 *.html
-*.txt
+!requirements.txt
 *.log
 tests

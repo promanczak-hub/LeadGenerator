@@ -9,7 +9,7 @@ from src.extractors.enricher_llm import (
     LinkedinResult,
 )
 
-from ddgs import AsyncDDGS
+from duckduckgo_search import AsyncDDGS
 
 
 def validate_nip(nip: str | None) -> str | None:
