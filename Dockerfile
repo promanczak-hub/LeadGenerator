@@ -23,6 +23,9 @@ COPY . .
 # Next.js telemetry is disabled during the build
 ENV NEXT_TELEMETRY_DISABLED=1
 
+ENV NEXT_PUBLIC_SUPABASE_URL=https://dummy.supabase.co
+ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=dummy
+
 RUN \
   if [ -f package-lock.json ]; then npm run build; \
   else echo "Lockfile not found." && exit 1; \
