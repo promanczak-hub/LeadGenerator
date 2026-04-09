@@ -21,6 +21,19 @@ async def trigger_scrapers(background_tasks: BackgroundTasks):
     background_tasks.add_task(run_all_scrapers)
     return {"message": "Scrapers started in background"}
 
+@app.post("/send-notifications")
+async def trigger_notifications(background_tasks: BackgroundTasks):
+    """
+    Endpoint to trigger daily lead notifications.
+    Useful for Cloud Scheduler (CRON).
+    """
+    from scripts.send_daily_notifications import main as send_emails
+    
+    # We use a wrapper to handle asyncio structure properly if needed
+    # but FastAPI BackgroundTasks can accept async directly if main is async.
+    background_tasks.add_task(send_emails)
+    return {"message": "Notifications started in background"}
+
 async def run_all_scrapers():
     print("=== SCRAPER RUN STARTED VIA API ===")
     await run_google_scraper()

@@ -55,6 +55,7 @@ jobs:
             REJESTR_IO_KEY=${{ secrets.REJESTR_IO_KEY }}
             GMAIL_SENDER=${{ secrets.GMAIL_SENDER }}
             GMAIL_APP_PASSWORD=${{ secrets.GMAIL_APP_PASSWORD }}
+            NOTIFICATION_EMAILS=${{ secrets.NOTIFICATION_EMAILS }}
 
   deploy-frontend:
     runs-on: ubuntu-latest
