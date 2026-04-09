@@ -25,3 +25,6 @@ steps:
 # Deklaracja obrazów stworzonych w trakcie buildu
 images:
   - 'gcr.io/$PROJECT_ID/leadgenerator:$COMMIT_SHA'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
