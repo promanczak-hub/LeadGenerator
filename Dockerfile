@@ -23,8 +23,8 @@ COPY . .
 # Next.js telemetry is disabled during the build
 ENV NEXT_TELEMETRY_DISABLED=1
 
-ENV NEXT_PUBLIC_SUPABASE_URL=https://dummy.supabase.co
-ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=dummy
+ENV NEXT_PUBLIC_SUPABASE_URL=https://auxazmfraivoznyodexg.supabase.co
+ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF1eGF6bWZyYWl2b3pueW9kZXhnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjE2OTI5MzcsImV4cCI6MjA3NzI2ODkzN30.PZ1NTx3nnmIEhthsVPjmLpeImvG6_z3lo1Mrn06fwoY
 
 RUN \
   if [ -f package-lock.json ]; then npm run build; \
