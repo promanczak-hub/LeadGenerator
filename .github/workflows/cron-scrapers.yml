@@ -1,6 +1,8 @@
 name: Scheduled Lead Scraper
 
 on:
+  push:
+    branches: [ master ]
   schedule:
     # Uruchamia się 4 razy dziennie: 06:00, 10:00, 14:00, 18:00 UTC (czyli 8:00, 12:00, 16:00, 20:00 czasu Polskiego w lato)
     - cron: '0 6,10,14,18 * * *'
