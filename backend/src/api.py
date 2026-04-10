@@ -1,10 +1,11 @@
+
 import os
 from fastapi import FastAPI, BackgroundTasks, HTTPException
-from scrapers.google import run_google_scraper
-from scrapers.pracuj import run_pracuj_scraper
-from scrapers.krs_new_companies import run_krs_scraper
-from scrapers.gunb import run_gunb_scraper
-from scrapers.baza_konkurencyjnosci import run_bk_scraper
+from src.scrapers.google import run_google_scraper
+from src.scrapers.pracuj import run_pracuj_scraper
+from src.scrapers.krs_new_companies import run_krs_scraper
+from src.scrapers.gunb import run_gunb_scraper
+from src.scrapers.baza_konkurencyjnosci import run_bk_scraper
 
 app = FastAPI(title="LeadGenerator API")
 

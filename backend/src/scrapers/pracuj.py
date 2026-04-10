@@ -1,89 +1,195 @@
+"""Pracuj.pl scraper – extracts the EMPLOYER (hiring company) from job listings.
+
+For a Lead Generator, job postings are valuable because they reveal companies
+that are actively hiring (growing/executing projects). The company_name
+should be the EMPLOYER, not the job title.
+"""
 from urllib.parse import quote
-from curl_cffi import requests
+
 from bs4 import BeautifulSoup
+from curl_cffi import requests
+
 from src.core.config import config
 from src.core.supabase import LeadInsert, insert_lead
-from src.extractors.llm import extract_companies
+
+
+def extract_employer_from_html(soup: BeautifulSoup) -> str | None:
+    """Extract the employer/company name from Pracuj.pl offer page.
+
+    Pracuj.pl uses specific HTML structures to display the company name.
+    We try multiple selectors to find it reliably.
+    """
+    # Method 1: Look for employer name in structured data
+    for tag in soup.find_all(
+        "a", {"data-test": "text-employerName"}
+    ):
+        name = tag.get_text(strip=True).replace("O firmie", "").strip()
+        if name and len(name) > 2:
+            return name
+
+    # Method 2: Look for company name in header section
+    for tag in soup.find_all(
+        "h2", {"data-test": "text-employerName"}
+    ):
+        name = tag.get_text(strip=True).replace("O firmie", "").strip()
+        if name and len(name) > 2:
+            return name
+
+    # Method 3: JSON-LD structured data
+    for script in soup.find_all("script", type="application/ld+json"):
+        import json
+
+        try:
+            data = json.loads(script.string or "")
+            if isinstance(data, dict):
+                org = data.get("hiringOrganization", {})
+                if isinstance(org, dict):
+                    name = org.get("name", "")
+                    if name and len(name) > 2:
+                        return name
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+    # Method 4: Meta tag og:site_name or company-related meta
+    for meta in soup.find_all("meta", {"property": "og:title"}):
+        content = meta.get("content", "")
+        if " - " in content:
+            # Often format: "Job Title - Company Name - Pracuj.pl"
+            parts = content.split(" - ")
+            if len(parts) >= 2:
+                candidate = parts[-2].strip()
+                if (
+                    candidate
+                    and "pracuj" not in candidate.lower()
+                    and len(candidate) > 2
+                ):
+                    return candidate
+
+    # Method 5: general text search for company pattern
+    for div in soup.find_all(
+        "div",
+        class_=lambda c: c and "employer" in str(c).lower(),
+    ):
+        name = div.get_text(strip=True)
+        if name and len(name) > 2 and len(name) < 100:
+            return name
+
+    return None
 
 
 async def scrape_pracuj(query: str, limit: int = 5):
-    print(f"Starting Pracuj.pl Scraping for query: {query}")
+    """Scrape Pracuj.pl for job listings, extracting employer names."""
+    print(f"Pracuj.pl: Searching for '{query}'")
 
-    # curl_cffi impersonates a real browser TLS fingerprint
-    session: requests.Session = requests.Session(impersonate="chrome120")
+    session: requests.Session = requests.Session(
+        impersonate="chrome120"
+    )
 
     try:
         url = f"https://www.pracuj.pl/praca/{quote(query)};kw"
         response = session.get(url, timeout=15.0)
-
         soup = BeautifulSoup(response.text, "html.parser")
 
-        # Searching for offer links in the HTML
-        offer_links = set()
+        # Find offer links
+        offer_links: set[str] = set()
         for a_tag in soup.find_all("a", href=True):
             href_attr = a_tag["href"]
-            href = href_attr[0] if isinstance(href_attr, list) else str(href_attr)
-            if href.startswith("https://www.pracuj.pl/praca/") and "oferta" in href:
-                # Need to clean up search tracking params if they exist to avoid huge URLs
-                clean_href = href.split("?")[0] if "?" in href else href
+            href = (
+                href_attr[0]
+                if isinstance(href_attr, list)
+                else str(href_attr)
+            )
+            if (
+                href.startswith("https://www.pracuj.pl/praca/")
+                and "oferta" in href
+            ):
+                clean_href = (
+                    href.split("?")[0] if "?" in href else href
+                )
                 offer_links.add(clean_href)
 
         links = list(offer_links)[:limit]
-        print(f"Found {len(links)} offer links. Limiting to {limit}.")
+        print(f"  Found {len(links)} offers.")
 
-        for index, link in enumerate(links):
-            print(f"[{index + 1}/{len(links)}] Scraping: {link}")
+        for idx, link in enumerate(links):
+            print(f"  [{idx + 1}/{len(links)}] {link[:60]}...")
             try:
                 offer_res = session.get(link, timeout=15.0)
-                offer_soup = BeautifulSoup(offer_res.text, "html.parser")
+                offer_soup = BeautifulSoup(
+                    offer_res.text, "html.parser"
+                )
 
-                # We extract the main container or body, avoiding script/style content
-                for element in offer_soup(["script", "style", "nav", "footer"]):
-                    element.extract()
+                # Remove noise
+                for tag in offer_soup(
+                    ["script", "style", "nav", "footer"]
+                ):
+                    tag.extract()
 
-                text_content = offer_soup.get_text(separator=" ", strip=True)
                 title = (
                     str(offer_soup.title.string)
                     if offer_soup.title and offer_soup.title.string
                     else "Brak tytułu"
                 )
 
-                if (
-                    len(text_content) > 100
-                    and "Cloudflare" not in title
-                    and "Just a moment" not in title
-                ):
-                    companies = extract_companies(text_content)
-                    for company in companies:
-                        print(
-                            f"  Found Company: {company.company_name} - {company.summary}"
-                        )
+                # Skip Cloudflare blocks
+                if "Cloudflare" in title or "Just a moment" in title:
+                    print("    Cloudflare block, skipping.")
+                    continue
 
-                        lead = LeadInsert(
-                            source="pracuj.pl",
-                            company_name=company.company_name,
-                            tender_title=title,
-                            url=str(link),
-                            ai_score=company.ai_score,
-                            ai_summary=company.summary,
-                            full_content=text_content[
-                                :1000
-                            ],  # Limiting to 1000 chars for DB
-                        )
-                        await insert_lead(lead)
-                else:
-                    print(
-                        f"  Warning: Skipped link. Content too short or Cloudflare block '{title}'"
-                    )
+                # Extract the EMPLOYER name
+                employer = extract_employer_from_html(offer_soup)
+                text_content = offer_soup.get_text(
+                    separator=" ", strip=True
+                )
+
+                if not employer and len(text_content) > 100:
+                    # Fallback: use title parsing
+                    # Pracuj titles often: "Stanowisko - Firma - Pracuj.pl"
+                    parts = title.replace(" | ", " - ").split(" - ")
+                    for part in reversed(parts):
+                        part = part.strip()
+                        if (
+                            part
+                            and "pracuj" not in part.lower()
+                            and len(part) > 3
+                            and len(part) < 80
+                        ):
+                            employer = part
+                            break
+
+                if not employer:
+                    print("    No employer found, skipping.")
+                    continue
+
+                # Clean job title (remove company and site name)
+                job_title = title.split(" - ")[0].strip()
+                if not job_title:
+                    job_title = title
+
+                print(f"    FIRMA: {employer}")
+                print(f"    Stanowisko: {job_title}")
+
+                lead = LeadInsert(
+                    source="pracuj.pl",
+                    company_name=employer,
+                    tender_title=job_title,
+                    url=str(link),
+                    ai_score=6,
+                    ai_summary=f"Firma {employer} szuka: {job_title}",
+                    full_content=text_content[:5000],
+                    status="processed",
+                )
+                await insert_lead(lead)
 
             except Exception as ex:
-                print(f"  Error processing offer {link}: {ex}")
+                print(f"    Error: {ex}")
 
     except Exception as e:
         print(f"Error scraping pracuj.pl for '{query}': {e}")
 
 
 async def run_pracuj_scraper():
+    """Run the Pracuj.pl scraper for all configured keywords."""
     keywords = config.PRACUJ_KEYWORDS
     for query in keywords:
         query = query.strip()

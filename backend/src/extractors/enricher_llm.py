@@ -78,7 +78,7 @@ async def extract_contact_info(text: str) -> Optional[EnrichmentResult]:
         client = genai.Client(api_key=config.GEMINI_API_KEY)
         try:
             response = await client.models.generate_content(
-                model=config.GEMINI_MODEL,
+                model=config.GEMINI_MODEL_ID,
                 contents=prompt,
                 config={
                     "response_mime_type": "application/json",
@@ -130,7 +130,7 @@ async def extract_linkedin_info(search_results: str) -> Optional[LinkedinResult]
         client = genai.Client(api_key=config.GEMINI_API_KEY)
         try:
             response = await client.models.generate_content(
-                model=config.GEMINI_MODEL,
+                model=config.GEMINI_MODEL_ID,
                 contents=prompt,
                 config={
                     "response_mime_type": "application/json",

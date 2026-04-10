@@ -9,7 +9,7 @@ from src.extractors.enricher_llm import (
     LinkedinResult,
 )
 
-from duckduckgo_search import AsyncDDGS
+from duckduckgo_search import DDGS
 
 
 def validate_nip(nip: str | None) -> str | None:
@@ -44,20 +44,23 @@ async def search_duckduckgo_html(
     query: str, max_results: int = 5, time_range: str | None = None
 ) -> list[dict]:
     """Helper method to execute a search on DuckDuckGo using the ddgs package (async)."""
-    results = []
-    try:
-        async with AsyncDDGS() as ddgs:
-            async for r in ddgs.text(query, timelimit=time_range, max_results=max_results):
-                results.append(
-                    {
-                        "title": r.get("title", ""),
-                        "href": r.get("href", ""),
-                        "body": r.get("body", ""),
-                    }
-                )
-    except Exception as e:
-        print(f"Error in DDG search: {e}")
-    return results
+    def _do_search():
+        results = []
+        try:
+            with DDGS() as ddgs:
+                for r in ddgs.text(query, timelimit=time_range, max_results=max_results):
+                    results.append(
+                        {
+                            "title": r.get("title", ""),
+                            "href": r.get("href", ""),
+                            "body": r.get("body", ""),
+                        }
+                    )
+        except Exception as e:
+            print(f"Error in DDG search: {e}")
+        return results
+
+    return await asyncio.to_thread(_do_search)
 
 
 async def search_linkedin_for_ceo(company_name: str) -> LinkedinResult | None:

@@ -110,7 +110,7 @@ def _find_company_by_offer_id(
     return None
 
 
-def _build_lead(company_name: str, announcement: dict) -> LeadInsert | None:
+async def _build_lead(company_name: str, announcement: dict) -> LeadInsert | None:
     title = announcement.get("title", "Projekt UE – Baza Konkurencyjności")
     announcement_id = announcement.get("id", "")
     url = f"https://bazakonkurencyjnosci.funduszeeuropejskie.gov.pl/ogloszenia/{announcement_id}"
@@ -166,7 +166,7 @@ async def run_bk_scraper() -> None:
                 print("    No winner found, skipping.")
                 continue
 
-            lead = _build_lead(company_name, ann)
+            lead = await _build_lead(company_name, ann)
             if lead and await insert_lead(lead):
                 print(f"    ✅ Saved: {lead.company_name}")
                 total_saved += 1

@@ -81,7 +81,7 @@ def _matches_keywords(row: dict[str, str]) -> bool:
     return any(kw.lower() in description for kw in config.GUNB_KEYWORDS)
 
 
-def _build_lead(row: dict[str, str]) -> LeadInsert | None:
+async def _build_lead(row: dict[str, str]) -> LeadInsert | None:
     """Create a LeadInsert from one CSV row after enrichment."""
     investor = row.get(COL_INVESTOR, "").strip()
     description = row.get(COL_DESCRIPTION, "").strip()
@@ -140,7 +140,7 @@ async def run_gunb_scraper() -> None:
         print(f"  Matching (recent + keywords): {len(matching)} rows.")
 
         for row in matching[:max_per_province]:
-            lead = _build_lead(row)
+            lead = await _build_lead(row)
             if lead and await insert_lead(lead):
                 print(f"  ✅ Saved: {lead.company_name}")
                 total_saved += 1
