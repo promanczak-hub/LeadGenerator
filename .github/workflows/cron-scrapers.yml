@@ -1,0 +1,39 @@
+name: Scheduled Lead Scraper
+
+on:
+  schedule:
+    # Uruchamia się 4 razy dziennie: 06:00, 10:00, 14:00, 18:00 UTC (czyli 8:00, 12:00, 16:00, 20:00 czasu Polskiego w lato)
+    - cron: '0 6,10,14,18 * * *'
+  workflow_dispatch: # Umożliwia również odpalenie ręczne z zakładki Actions
+
+jobs:
+  run-scrapers:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip' # Przyspiesza działanie poprzez cache'owanie paczek
+
+      - name: Install Dependencies
+        working-directory: ./backend
+        run: |
+          pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Run Scrapers
+        working-directory: ./backend
+        env:
+          PYTHONPATH: ${{ github.workspace }}/backend
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          LLM_PROVIDER: ${{ secrets.LLM_PROVIDER }}
+        run: |
+          python src/main.py

@@ -2,17 +2,19 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-env_path = Path(__file__).parent.parent.parent / ".env"
-load_dotenv(dotenv_path=env_path)
+# Try to load from various potential locations
+load_dotenv(dotenv_path=Path(__file__).parent.parent.parent / ".env")
+load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env") # backend root
+load_dotenv() # current dir
 
 
 class Config:
     SUPABASE_URL = os.getenv("SUPABASE_URL", "")
     SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-    GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp")
+    GEMINI_MODEL_ID: str = os.getenv("GEMINI_MODEL_ID", "gemini-2.0-flash")
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-    LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini") # 'gemini' or 'anthropic'
+    LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini")
 
     # Email settings
     GMAIL_SENDER = os.getenv("GMAIL_SENDER", "")
@@ -25,7 +27,7 @@ class Config:
     ).split(",")
     GOOGLE_KEYWORDS = os.getenv(
         "GOOGLE_KEYWORDS",
-        "konsorcjum,przetarg,wybuduje,wygrała przetarg wdrożenie,podpisała umowę na realizację,GDDKiA przetarg,GDDKiA podpisanie umowy,GDDKiA najkorzystniejsza oferta",
+        "konsorcjum,przetarg,wybuduje,wygrała przetarg wdrożenie,podpisała umowę na realizację,GDDKiA przetarg,GDDKiA podpisanie umowy,GDDKiA najkorzystniejsza oferta,PSE przetarg,PSE podpisanie umowy,Polskie Sieci Elektroenergetyczne",
     ).split(",")
 
     # GUNB – Building permits scraper
