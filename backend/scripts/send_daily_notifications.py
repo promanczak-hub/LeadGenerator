@@ -16,11 +16,18 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+from datetime import datetime, timedelta
+
 async def fetch_unsent_leads() -> list[dict[str, Any]]:
-    """Fetch leads from Supabase where email_sent is false."""
+    """Fetch leads from Supabase where email_sent is false and inserted in the last 24h."""
     try:
+        yesterday = (datetime.now() - timedelta(days=1)).isoformat()
         response = (
-            await supabase.table("leads").select("*").eq("email_sent", False).execute()
+            await supabase.table("leads")
+            .select("*")
+            .eq("email_sent", False)
+            .gte("inserted_at", yesterday)
+            .execute()
         )
         return cast(list[dict[str, Any]], response.data)
     except Exception as e:
