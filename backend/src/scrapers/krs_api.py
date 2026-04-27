@@ -104,9 +104,11 @@ class KRSClient:
 
             # Extracting forma prawna (Type of Company)
             forma_prawna_raw = dane_podmiotu.get("formaPrawna")
-            forma_prawna = str(forma_prawna_raw).upper() if forma_prawna_raw else "KRS / NOWY WPIS"
+            forma_prawna = (
+                str(forma_prawna_raw).upper() if forma_prawna_raw else "KRS / NOWY WPIS"
+            )
 
-            # Extracting purpose/PKD 
+            # Extracting purpose/PKD
             dzial3 = dane_content.get("dzial3", {})
             pkd_info = dzial3.get("przedmiotDzialalnosci", {}) or dzial1.get(
                 "przedmiotDzialalnosci", {}
@@ -117,26 +119,30 @@ class KRSClient:
             if pkd_list:
                 pkd_item = pkd_list[0]
                 opis = pkd_item.get("opis", "")
-                
+
                 # Assemble PKD Code e.g. "41.20.Z"
                 kod_dzial = pkd_item.get("kodDzial", "")
                 kod_klasa = pkd_item.get("kodKlasa", "")
                 kod_podklasa = pkd_item.get("kodPodklasa", "")
-                
+
                 parts = [p for p in [kod_dzial, kod_klasa, kod_podklasa] if p]
                 if len(parts) == 3:
-                     pkd_code = f"{kod_dzial}.{kod_klasa}.{kod_podklasa}"
+                    pkd_code = f"{kod_dzial}.{kod_klasa}.{kod_podklasa}"
                 elif parts:
-                     pkd_code = ".".join(parts)
+                    pkd_code = ".".join(parts)
                 else:
-                     pkd_code = ""
+                    pkd_code = ""
 
                 industry = f"{pkd_code} | {opis}" if pkd_code else opis
-            
+
             # Truncate potentially long fields
             safe_industry = industry[:95] + "..." if len(industry) > 97 else industry
-            safe_company = full_name[:245] + "..." if len(full_name) > 248 else full_name
-            safe_forma_prawna = forma_prawna[:95] + "..." if len(forma_prawna) > 97 else forma_prawna
+            safe_company = (
+                full_name[:245] + "..." if len(full_name) > 248 else full_name
+            )
+            safe_forma_prawna = (
+                forma_prawna[:95] + "..." if len(forma_prawna) > 97 else forma_prawna
+            )
 
             return LeadInsert(
                 source="KRS Monitor",

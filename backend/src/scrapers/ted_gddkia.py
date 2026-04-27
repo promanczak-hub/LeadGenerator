@@ -1,13 +1,17 @@
 from curl_cffi import requests
 from bs4 import BeautifulSoup
+from src.core.profiles import get_profile
 from src.core.supabase import LeadInsert, insert_lead
 from src.extractors.llm import extract_companies
 
 
-def get_ted_award_notices(limit: int = 5):
+def get_ted_award_notices(limit: int = 5, keywords: list[str] = None):
     """
     Fetches recent contract award notices for Poland from TED via HTML scraping.
     """
+    if keywords is None:
+        keywords = []
+
     url = "https://ted.europa.eu/pl/search/result"
 
     # query for Contract Awards (ND=3) in Poland (CY=PL)
@@ -35,14 +39,14 @@ def get_ted_award_notices(limit: int = 5):
             link = "https://ted.europa.eu" + href_str
             desc = desc_el.get_text(strip=True) if desc_el else ""
 
-            # Simple content filtering - we look for GDDKiA or PKP in title/desc
             lower_text = (title + " " + desc).lower()
-            if (
-                "generalna dyrekcja dróg krajowych" in lower_text
-                or "gddkia" in lower_text
-                or "pkp" in lower_text
-                or "kolej" in lower_text
-            ):
+
+            # If no keywords are provided, append all
+            if not keywords:
+                results.append({"title": title, "link": link, "description": desc})
+                continue
+
+            if any(kw.lower() in lower_text for kw in keywords):
                 results.append({"title": title, "link": link, "description": desc})
         return results
     except Exception as e:
@@ -68,11 +72,12 @@ def scrape_ted_notice(url: str) -> str:
         return ""
 
 
-async def run_ted_scraper():
-    print("Starting TED Contract Awards Scraper (GDDKiA/PKP)...")
+async def run_ted_scraper(profile_name: str = "default"):
+    print(f"Starting TED Contract Awards Scraper - Profile: {profile_name.upper()}...")
+    profile = get_profile(profile_name)
 
     # We fetch a larger batch because we filter locally
-    notices = get_ted_award_notices(limit=50)
+    notices = get_ted_award_notices(limit=50, keywords=profile.ted_keywords)
 
     if not notices:
         print("No relevant TED notices found.")
@@ -87,7 +92,7 @@ async def run_ted_scraper():
         if len(text_content) < 100:
             continue
 
-        companies = extract_companies(text_content)
+        companies = await extract_companies(text_content)
 
         for company in companies:
             print(f"  Found Winner: {company.company_name} - {company.summary}")

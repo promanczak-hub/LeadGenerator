@@ -1,11 +1,9 @@
-name: Scheduled Lead Scraper - Default
+name: Scheduled Lead Scraper - RAC
 
 on:
-  push:
-    branches: [ master ]
   schedule:
-    # Uruchamia się raz dziennie o 07:30 UTC (09:30 czasu Polskiego w dni powszednie)
-    - cron: '30 7 * * 1-5'
+    # Uruchamia się 2 razy w tygodniu (Środa i Niedziela) o 08:30 UTC (10:30 czasu Polskiego)
+    - cron: '30 8 * * 0,3'
   workflow_dispatch: # Umożliwia również odpalenie ręczne z zakładki Actions
 
 jobs:
@@ -28,16 +26,15 @@ jobs:
           pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: Run Scrapers
+      - name: Run Scrapers (RAC Profile)
         working-directory: ./backend
         env:
           PYTHONPATH: ${{ github.workspace }}/backend
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          python src/main.py
+          python src/main.py --profile rac
 
       - name: Send Email Notifications
         working-directory: ./backend
@@ -47,6 +44,7 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           GMAIL_SENDER: ${{ secrets.GMAIL_SENDER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          NOTIFICATION_EMAILS: ${{ secrets.NOTIFICATION_EMAILS }}
+          NOTIFICATION_EMAILS: "jkucab@express.pl,jkuczek@express.pl"
+          CC_EMAILS: "promanczak@express.pl"
         run: |
           python scripts/send_daily_notifications.py

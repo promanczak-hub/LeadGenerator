@@ -62,13 +62,12 @@ async def extract_contact_info(text: str) -> Optional[EnrichmentResult]:
             response = await client.messages.create(
                 model="claude-3-5-sonnet-20240620",
                 max_tokens=1000,
-                messages=[{"role": "user", "content": prompt}]
+                messages=[{"role": "user", "content": prompt}],
             )
             # Parse JSON from response
-            import json
             content = response.content[0].text
-            json_start = content.find('{')
-            json_end = content.rfind('}') + 1
+            json_start = content.find("{")
+            json_end = content.rfind("}") + 1
             return EnrichmentResult.model_validate_json(content[json_start:json_end])
         except Exception as e:
             print(f"Błąd Anthropic (Contact): {e}. Fallback to Gemini...")
@@ -88,7 +87,7 @@ async def extract_contact_info(text: str) -> Optional[EnrichmentResult]:
             return response.parsed
         except Exception as e:
             print(f"Błąd Gemini (Contact): {e}")
-    
+
     return None
 
 
@@ -115,12 +114,11 @@ async def extract_linkedin_info(search_results: str) -> Optional[LinkedinResult]
             response = await client.messages.create(
                 model="claude-3-5-sonnet-20240620",
                 max_tokens=1000,
-                messages=[{"role": "user", "content": prompt}]
+                messages=[{"role": "user", "content": prompt}],
             )
-            import json
             content = response.content[0].text
-            json_start = content.find('{')
-            json_end = content.rfind('}') + 1
+            json_start = content.find("{")
+            json_end = content.rfind("}") + 1
             return LinkedinResult.model_validate_json(content[json_start:json_end])
         except Exception as e:
             print(f"Błąd Anthropic (LinkedIn): {e}. Fallback to Gemini...")

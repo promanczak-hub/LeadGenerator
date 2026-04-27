@@ -4,13 +4,14 @@ For a Lead Generator, job postings are valuable because they reveal companies
 that are actively hiring (growing/executing projects). The company_name
 should be the EMPLOYER, not the job title.
 """
+
 from urllib.parse import quote
 
 from bs4 import BeautifulSoup
 from curl_cffi import requests
 
-from src.core.config import config
-from src.core.supabase import LeadInsert, insert_lead
+from src.core.profiles import get_profile
+from src.core.supabase import LeadInsert, insert_lead, check_company_exists
 
 
 def extract_employer_from_html(soup: BeautifulSoup) -> str | None:
@@ -20,17 +21,13 @@ def extract_employer_from_html(soup: BeautifulSoup) -> str | None:
     We try multiple selectors to find it reliably.
     """
     # Method 1: Look for employer name in structured data
-    for tag in soup.find_all(
-        "a", {"data-test": "text-employerName"}
-    ):
+    for tag in soup.find_all("a", {"data-test": "text-employerName"}):
         name = tag.get_text(strip=True).replace("O firmie", "").strip()
         if name and len(name) > 2:
             return name
 
     # Method 2: Look for company name in header section
-    for tag in soup.find_all(
-        "h2", {"data-test": "text-employerName"}
-    ):
+    for tag in soup.find_all("h2", {"data-test": "text-employerName"}):
         name = tag.get_text(strip=True).replace("O firmie", "").strip()
         if name and len(name) > 2:
             return name
@@ -81,9 +78,7 @@ async def scrape_pracuj(query: str, limit: int = 5):
     """Scrape Pracuj.pl for job listings, extracting employer names."""
     print(f"Pracuj.pl: Searching for '{query}'")
 
-    session: requests.Session = requests.Session(
-        impersonate="chrome120"
-    )
+    session: requests.Session = requests.Session(impersonate="chrome120")
 
     try:
         url = f"https://www.pracuj.pl/praca/{quote(query)};kw"
@@ -94,18 +89,9 @@ async def scrape_pracuj(query: str, limit: int = 5):
         offer_links: set[str] = set()
         for a_tag in soup.find_all("a", href=True):
             href_attr = a_tag["href"]
-            href = (
-                href_attr[0]
-                if isinstance(href_attr, list)
-                else str(href_attr)
-            )
-            if (
-                href.startswith("https://www.pracuj.pl/praca/")
-                and "oferta" in href
-            ):
-                clean_href = (
-                    href.split("?")[0] if "?" in href else href
-                )
+            href = href_attr[0] if isinstance(href_attr, list) else str(href_attr)
+            if href.startswith("https://www.pracuj.pl/praca/") and "oferta" in href:
+                clean_href = href.split("?")[0] if "?" in href else href
                 offer_links.add(clean_href)
 
         links = list(offer_links)[:limit]
@@ -115,14 +101,10 @@ async def scrape_pracuj(query: str, limit: int = 5):
             print(f"  [{idx + 1}/{len(links)}] {link[:60]}...")
             try:
                 offer_res = session.get(link, timeout=15.0)
-                offer_soup = BeautifulSoup(
-                    offer_res.text, "html.parser"
-                )
+                offer_soup = BeautifulSoup(offer_res.text, "html.parser")
 
                 # Remove noise
-                for tag in offer_soup(
-                    ["script", "style", "nav", "footer"]
-                ):
+                for tag in offer_soup(["script", "style", "nav", "footer"]):
                     tag.extract()
 
                 title = (
@@ -138,9 +120,7 @@ async def scrape_pracuj(query: str, limit: int = 5):
 
                 # Extract the EMPLOYER name
                 employer = extract_employer_from_html(offer_soup)
-                text_content = offer_soup.get_text(
-                    separator=" ", strip=True
-                )
+                text_content = offer_soup.get_text(separator=" ", strip=True)
 
                 if not employer and len(text_content) > 100:
                     # Fallback: use title parsing
@@ -159,6 +139,10 @@ async def scrape_pracuj(query: str, limit: int = 5):
 
                 if not employer:
                     print("    No employer found, skipping.")
+                    continue
+
+                if await check_company_exists(employer):
+                    print(f"    -> Skipping duplicate: {employer}")
                     continue
 
                 # Clean job title (remove company and site name)
@@ -188,9 +172,11 @@ async def scrape_pracuj(query: str, limit: int = 5):
         print(f"Error scraping pracuj.pl for '{query}': {e}")
 
 
-async def run_pracuj_scraper():
+async def run_pracuj_scraper(profile_name: str = "default"):
     """Run the Pracuj.pl scraper for all configured keywords."""
-    keywords = config.PRACUJ_KEYWORDS
+    print(f"Starting Pracuj.pl Scraper - Profile: {profile_name.upper()}...")
+    profile = get_profile(profile_name)
+    keywords = profile.pracuj_keywords
     for query in keywords:
         query = query.strip()
         if not query:

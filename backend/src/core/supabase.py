@@ -25,10 +25,32 @@ class LeadInsert(BaseModel):
     contact_phone: Optional[str] = None
     nip: Optional[str] = None
     industry: Optional[str] = None
+    website: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    job_title: Optional[str] = None
+
+
+async def check_company_exists(company_name: str) -> bool:
+    try:
+        response = (
+            await supabase.table("leads")
+            .select("id")
+            .ilike("company_name", company_name)
+            .limit(1)
+            .execute()
+        )
+        return len(response.data) > 0
+    except Exception as e:
+        print(f"Error checking if company exists {company_name}: {e}")
+        return False
 
 
 async def insert_lead(lead: LeadInsert) -> bool:
     try:
+        if await check_company_exists(lead.company_name):
+            print(f"Skipping insert_lead - duplicate company: {lead.company_name}")
+            return False
+
         response = (
             await supabase.table("leads")
             .insert(lead.model_dump(exclude_none=True))

@@ -1,6 +1,6 @@
 from curl_cffi import requests
 from bs4 import BeautifulSoup
-from src.core.supabase import LeadInsert, insert_lead
+from src.core.supabase import LeadInsert, insert_lead, check_company_exists
 from src.extractors.llm import extract_companies
 
 
@@ -72,8 +72,10 @@ def scrape_bzp_notice(url: str) -> str:
         return ""
 
 
-async def run_bzp_scraper():
-    print("Starting e-Zamówienia BZP Contract Awards Scraper...")
+async def run_bzp_scraper(profile_name: str = "default"):
+    print(
+        f"Starting e-Zamówienia BZP Contract Awards Scraper - Profile: {profile_name.upper()}..."
+    )
 
     notices = get_bzp_award_notices(limit=10)
 
@@ -91,9 +93,13 @@ async def run_bzp_scraper():
             print("  Notice content too short.")
             continue
 
-        companies = extract_companies(text_content)
+        companies = await extract_companies(text_content)
 
         for company in companies:
+            if await check_company_exists(company.company_name):
+                print(f"  -> Skipping duplicate: {company.company_name}")
+                continue
+
             print(f"  Found Winner: {company.company_name} - {company.summary}")
 
             lead = LeadInsert(

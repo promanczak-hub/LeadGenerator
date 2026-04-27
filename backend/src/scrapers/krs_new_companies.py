@@ -2,11 +2,12 @@ from datetime import datetime, timedelta
 import httpx
 
 from src.core.config import config
+from src.core.profiles import get_profile
 from src.core.supabase import LeadInsert, insert_lead
 from src.extractors.enrichment import enrich_company_data
 
 
-async def run_krs_scraper() -> None:
+async def run_krs_scraper(profile_name: str = "default") -> None:
     """
     Scraper for Rejestr.io API v2
     Fetches newly registered companies from the National Court Register (KRS)
@@ -18,6 +19,9 @@ async def run_krs_scraper() -> None:
         print("Brak poprawnego klucza REJESTR_IO_KEY w .env. Pomijam scraper KRS.")
         return
 
+    print(f"Starting KRS Scraper - Profile: {profile_name.upper()}...")
+    profile = get_profile(profile_name)
+
     # Check companies registered yesterday (usually KRS is published with a 1-day delay)
     target_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     print(f"Rozpoczynam pobieranie nowych spółek z KRS dla daty: {target_date}")
@@ -28,7 +32,7 @@ async def run_krs_scraper() -> None:
     total_found = 0
 
     with httpx.Client(timeout=30.0) as client:
-        for pkd in config.KRS_INDUSTRIES:
+        for pkd in profile.krs_industries:
             pkd = pkd.strip()
             if not pkd:
                 continue

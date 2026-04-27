@@ -140,9 +140,11 @@ async def _build_lead(company_name: str, announcement: dict) -> LeadInsert | Non
     )
 
 
-async def run_bk_scraper() -> None:
+async def run_bk_scraper(profile_name: str = "default") -> None:
     """Main entry point: fetch BK_PAGES pages of resolved announcements."""
-    print("=== Starting Baza Konkurencyjności EU Projects Scraper ===")
+    print(
+        f"=== Starting Baza Konkurencyjności EU Projects Scraper - Profile: {profile_name.upper()} ==="
+    )
     session = _get_session()
     total_saved = 0
 

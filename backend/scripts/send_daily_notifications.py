@@ -16,7 +16,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-from datetime import datetime, timedelta
+from datetime import timedelta
+
 
 async def fetch_unsent_leads() -> list[dict[str, Any]]:
     """Fetch leads from Supabase where email_sent is false and inserted in the last 24h."""

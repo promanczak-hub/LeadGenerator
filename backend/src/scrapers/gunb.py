@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 import httpx
 
 from src.core.config import config
+from src.core.profiles import get_profile
 from src.core.supabase import LeadInsert, insert_lead
 from src.extractors.enrichment import enrich_company_data
 
@@ -75,10 +76,10 @@ def _is_recent(row: dict[str, str], days: int) -> bool:
     return False
 
 
-def _matches_keywords(row: dict[str, str]) -> bool:
+def _matches_keywords(row: dict[str, str], keywords: list[str]) -> bool:
     """Return True if the investment description contains any target keyword."""
     description = (row.get(COL_DESCRIPTION) or "").lower()
-    return any(kw.lower() in description for kw in config.GUNB_KEYWORDS)
+    return any(kw.lower() in description for kw in keywords)
 
 
 async def _build_lead(row: dict[str, str]) -> LeadInsert | None:
@@ -117,9 +118,14 @@ async def _build_lead(row: dict[str, str]) -> LeadInsert | None:
     )
 
 
-async def run_gunb_scraper() -> None:
+async def run_gunb_scraper(profile_name: str = "default") -> None:
     """Main entry point: iterate provinces, filter recent + relevant rows."""
-    print("=== Starting GUNB Building Permits Scraper ===")
+    print(
+        f"=== Starting GUNB Building Permits Scraper - Profile: {profile_name.upper()} ==="
+    )
+    profile = get_profile(profile_name)
+    keywords = profile.gunb_keywords
+
     total_saved = 0
     max_per_province = config.GUNB_MAX_LEADS_PER_PROVINCE
 
@@ -135,7 +141,7 @@ async def run_gunb_scraper() -> None:
         matching = [
             r
             for r in rows
-            if _is_recent(r, config.GUNB_DAYS_BACK) and _matches_keywords(r)
+            if _is_recent(r, config.GUNB_DAYS_BACK) and _matches_keywords(r, keywords)
         ]
         print(f"  Matching (recent + keywords): {len(matching)} rows.")
 

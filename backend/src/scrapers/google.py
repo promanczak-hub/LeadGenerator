@@ -1,85 +1,208 @@
-"""Google News scraper with full article text extraction.
+"""Google News scraper with full article text extraction and API Fallback Strategy.
 
-Fetches RSS from Google News, resolves redirect URLs to actual articles,
-scrapes full article text, and extracts CONTRACTOR companies via Gemini 2.5 Flash.
+Uses Tavily -> Brave -> SerpApi -> DuckDuckGo -> Google RSS in a cascade.
+Filters out strictly old articles using timestamp parsing.
 """
+
 import urllib.parse
 import asyncio
+import os
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 import httpx
 from bs4 import BeautifulSoup
+from duckduckgo_search import DDGS
+from tavily import TavilyClient
 
-from src.core.config import config
-from src.core.supabase import LeadInsert, insert_lead
+from src.core.profiles import get_profile
+from src.core.supabase import LeadInsert, insert_lead, check_company_exists
 from src.extractors.llm import extract_companies
+from src.services.osint_service import enrich_company_metadata
 
-# Timeout and limits
 HTTP_TIMEOUT = 15.0
 MAX_ARTICLE_CHARS = 5000
 MIN_ARTICLE_LENGTH = 150
+MAX_NEWS_AGE_DAYS = 14
+
+SERPAPI_KEY = os.getenv("SERPAPI_API_KEY")
+TAVILY_KEY = os.getenv("TAVILY_API_KEY")
+BRAVE_KEY = os.getenv("BRAVE_API_KEY")
 
 
-async def get_google_news_links(
-    query: str, limit: int = 5
-) -> list[dict]:
-    """Fetch RSS feed from Google News and return article metadata."""
+def parse_news_date(date_str: str) -> datetime | None:
+    if not date_str:
+        return None
+    try:
+        # ISO formats
+        d_str = date_str.replace("Z", "+00:00")
+        return datetime.fromisoformat(d_str)
+    except ValueError:
+        pass
+    try:
+        # RFC 2822
+        return parsedate_to_datetime(date_str)
+    except Exception:
+        pass
+    return None
+
+
+def is_too_old(pub_date: str, max_days: int = MAX_NEWS_AGE_DAYS) -> bool:
+    dt = parse_news_date(pub_date)
+    if not dt:
+        return False
+    now = datetime.now(timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return (now - dt).days > max_days
+
+
+async def get_tavily_news(query: str, limit: int = 5) -> list[dict]:
+    if not TAVILY_KEY:
+        raise ValueError("No TAVILY_API_KEY")
+    client = TavilyClient(api_key=TAVILY_KEY)
+    
+    response = await asyncio.to_thread(
+        client.search,
+        query=query,
+        search_depth="advanced",
+        topic="news",
+        days=MAX_NEWS_AGE_DAYS,
+        max_results=limit
+    )
+    
+    results = []
+    for item in response.get("results", []):
+        results.append({
+            "title": item.get("title", ""),
+            "link": item.get("url", ""),
+            "pubDate": item.get("published_date", ""),
+            "source_engine": "Tavily"
+        })
+    return results
+
+
+async def get_brave_news(query: str, limit: int = 5) -> list[dict]:
+    if not BRAVE_KEY:
+        raise ValueError("No BRAVE_API_KEY")
+    
+    url = "https://api.search.brave.com/res/v1/news/search"
+    headers = {
+        "Accept": "application/json",
+        "X-Subscription-Token": BRAVE_KEY
+    }
+    # past month is 'pm', past week 'pw'
+    params = {"q": query, "freshness": "pm", "count": limit, "search_lang": "pl"}
+    
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        response = await client.get(url, headers=headers, params=params)
+        response.raise_for_status()
+        data = response.json()
+        
+    results = []
+    for item in data.get("results", []):
+        results.append({
+            "title": item.get("title", ""),
+            "link": item.get("url", ""),
+            "pubDate": item.get("age", ""), 
+            "source_engine": "Brave"
+        })
+    return results
+
+
+async def get_serpapi_news_links(query: str, limit: int = 5) -> list[dict]:
+    if not SERPAPI_KEY:
+        raise ValueError("No SERPAPI_API_KEY")
+
+    url = "https://serpapi.com/search"
+    params = {
+        "engine": "google_news",
+        "q": query,
+        "gl": "pl",
+        "hl": "pl",
+        "tbs": "qdr:w,sbd:1", # past week + sort by date
+        "api_key": SERPAPI_KEY,
+    }
+
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        response = await client.get(url, params=params)
+        response.raise_for_status()
+        data = response.json()
+
+    results = []
+    for item in data.get("news_results", [])[:limit]:
+        results.append({
+            "title": item.get("title", ""),
+            "link": item.get("link", ""),
+            "pubDate": item.get("date", ""),
+            "source_engine": "SerpApi"
+        })
+    return results
+
+
+async def get_duckduckgo_news(query: str, limit: int = 5) -> list[dict]:
+    def fetch():
+        with DDGS() as ddgs:
+            return list(ddgs.news(query, timelimit="m", max_results=limit))
+            
+    try:
+        items = await asyncio.to_thread(fetch)
+    except Exception as e:
+        raise ValueError(f"DDG failed: {e}")
+
+    results = []
+    for item in items:
+        results.append({
+            "title": item.get("title", ""),
+            "link": item.get("url", ""),
+            "pubDate": item.get("date", ""),
+            "source_engine": "DuckDuckGo"
+        })
+    return results
+
+
+async def get_google_rss_news_links(query: str, limit: int = 5) -> list[dict]:
     url = (
         f"https://news.google.com/rss/search?"
-        f"q={urllib.parse.quote(query)}&hl=pl&gl=PL&ceid=PL:pl"
+        f"q={urllib.parse.quote(query + f' when:{MAX_NEWS_AGE_DAYS}d')}&hl=pl&gl=PL&ceid=PL:pl"
     )
-    try:
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-            response = await client.get(url)
-            response.raise_for_status()
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        response = await client.get(url)
+        response.raise_for_status()
 
-        soup = BeautifulSoup(response.content, features="xml")
-        items = soup.find_all("item")
+    soup = BeautifulSoup(response.content, features="xml")
+    items = soup.find_all("item")
 
-        results = []
-        for item in items[:limit]:
-            title = item.title.text if item.title else ""
-            link = item.link.text if item.link else ""
-            pub_date = item.pubDate.text if item.pubDate else ""
-            results.append(
-                {"title": title, "link": link, "pubDate": pub_date}
-            )
-        return results
-    except Exception as e:
-        print(f"Error fetching Google News for '{query}': {e}")
-        return []
+    results = []
+    for item in items[:limit]:
+        title = item.title.text if item.title else ""
+        link = item.link.text if item.link else ""
+        pub_date = item.pubDate.text if item.pubDate else ""
+        results.append({
+            "title": title, 
+            "link": link, 
+            "pubDate": pub_date, 
+            "source_engine": "Google RSS"
+        })
+    return results
 
 
 async def resolve_google_redirect(google_url: str) -> str:
-    """Decode a Google News RSS URL to the actual article URL.
-
-    Google News RSS returns protobuf-encoded URLs like:
-    https://news.google.com/rss/articles/CBMi...
-    Uses the googlenewsdecoder library to decode them.
-    """
     if not google_url or "news.google.com" not in google_url:
         return google_url
-
     try:
-        from googlenewsdecoder import gnewsdecoder
-
+        from googlenewsdecoder import gnewsdecoder  # type: ignore
         decoded = gnewsdecoder(google_url)
         if decoded.get("status") and decoded.get("decoded_url"):
             return decoded["decoded_url"]
         return google_url
     except Exception as e:
-        print(f"  Could not decode Google News URL: {e}")
         return google_url
 
 
 async def fetch_article_text(url: str) -> str:
-    """Fetch full article text from a URL.
-
-    Scrapes the page, extracts paragraph text, and returns
-    clean text content suitable for AI analysis.
-    """
     if not url:
         return ""
-
     try:
         headers = {
             "User-Agent": (
@@ -88,128 +211,133 @@ async def fetch_article_text(url: str) -> str:
                 "Chrome/120.0.0.0 Safari/537.36"
             ),
             "Accept": "text/html,application/xhtml+xml",
-            "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.8",
         }
-        async with httpx.AsyncClient(
-            follow_redirects=True,
-            timeout=HTTP_TIMEOUT,
-        ) as client:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=HTTP_TIMEOUT) as client:
             response = await client.get(url, headers=headers)
             response.raise_for_status()
 
         soup = BeautifulSoup(response.text, "html.parser")
-
-        # Remove noise elements
-        for tag in soup(
-            ["script", "style", "nav", "footer", "header", "aside", "form"]
-        ):
+        for tag in soup(["script", "style", "nav", "footer", "header", "aside", "form"]):
             tag.extract()
 
-        # Extract meaningful paragraphs
         paragraphs = soup.find_all("p")
-        text_parts = []
-        for p in paragraphs:
-            txt = p.get_text(strip=True)
-            if len(txt) > 30:
-                text_parts.append(txt)
-
+        text_parts = [p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 30]
         article_text = "\n".join(text_parts)
 
-        # If paragraphs are too short, try article/main tags
         if len(article_text) < MIN_ARTICLE_LENGTH:
-            for container in soup.find_all(
-                ["article", "main", "div"],
-                class_=lambda c: c and any(
-                    kw in str(c).lower()
-                    for kw in ["article", "content", "body", "text"]
-                ),
-            ):
+            for container in soup.find_all(["article", "main", "div"], class_=lambda c: c and any(kw in str(c).lower() for kw in ["article", "content", "body", "text"])):
                 fallback = container.get_text(separator="\n", strip=True)
                 if len(fallback) > len(article_text):
                     article_text = fallback
 
         return article_text[:MAX_ARTICLE_CHARS]
-
     except Exception as e:
         print(f"  Error fetching article from {url[:60]}: {e}")
         return ""
 
 
-async def run_google_scraper():
-    """Main Google News scraper pipeline."""
-    print("Starting Google News Scraper (Full Article Mode)...")
-    keywords = config.GOOGLE_KEYWORDS
+async def search_with_fallback(query: str, limit: int = 5) -> list[dict]:
+    """Cascade API search: Tavily -> Brave -> SerpApi -> DuckDuckGo -> Google RSS"""
+    print(f"  [Search] Attempting Tavily...")
+    try:
+        return await get_tavily_news(query, limit)
+    except Exception as e:
+        print(f"  -> Tavily failed/skipped: {e}")
+        
+    print(f"  [Search] Attempting Brave...")
+    try:
+        return await get_brave_news(query, limit)
+    except Exception as e:
+        print(f"  -> Brave failed/skipped: {e}")
+
+    print(f"  [Search] Attempting SerpApi...")
+    try:
+        return await get_serpapi_news_links(query, limit)
+    except Exception as e:
+        print(f"  -> SerpApi failed/skipped: {e}")
+
+    print(f"  [Search] Attempting DuckDuckGo...")
+    try:
+        return await get_duckduckgo_news(query, limit)
+    except Exception as e:
+        print(f"  -> DuckDuckGo failed/skipped: {e}")
+
+    print(f"  [Search] Attempting Google RSS...")
+    try:
+        return await get_google_rss_news_links(query, limit)
+    except Exception as e:
+        print(f"  -> Google RSS failed: {e}")
+        
+    return []
+
+
+async def run_google_scraper(profile_name: str = "default"):
+    print(f"Starting News Scraper Cascade (Max Age: {MAX_NEWS_AGE_DAYS} days) - Profile: {profile_name.upper()}...")
+    profile = get_profile(profile_name)
+    keywords = profile.google_keywords + profile.chamber_keywords
 
     for query in keywords:
         query = query.strip()
         if not query:
             continue
 
-        print(f"\nSearching Google News for: '{query}'")
-        articles = await get_google_news_links(query, limit=5)
+        print(f"\nQuerying: '{query}'")
+        articles = await search_with_fallback(query, limit=5)
 
         for article in articles:
             raw_title = article["title"]
             google_url = article["link"]
-            print(f"  Processing: {raw_title[:60]}...")
+            pub_date = article["pubDate"]
+            engine = article["source_engine"]
 
-            # Step 1: Resolve Google redirect to actual article URL
-            real_url = await resolve_google_redirect(google_url)
-            if real_url != google_url:
-                print(f"  Resolved URL: {real_url[:60]}...")
-
-            # Step 2: Fetch full article text
-            text = await fetch_article_text(real_url)
-            if len(text) < MIN_ARTICLE_LENGTH:
-                print(
-                    f"  Article too short ({len(text)} chars), skipping."
-                )
+            print(f"  Processing [{engine}]: {raw_title[:60]}...")
+            
+            # 1. Date Check in Python
+            if is_too_old(pub_date, max_days=MAX_NEWS_AGE_DAYS):
+                print(f"  -> ODRZUCONO: Artykuł posiada historyczną datę publikacji ({pub_date}).")
                 continue
 
-            print(f"  Fetched {len(text)} chars of article text.")
+            real_url = await resolve_google_redirect(google_url)
+            
+            # 2. Fetch full article text
+            text_content = await fetch_article_text(real_url)
+            if len(text_content) < MIN_ARTICLE_LENGTH:
+                print(f"  -> Skipped: Article too short.")
+                continue
 
-            # Step 3: Extract contractors via Gemini 2.5 Flash
-            companies = await extract_companies(
-                text, raw_title=raw_title
-            )
-
+            # 3. LLM Extraction
+            companies = await extract_companies(text_content, raw_title=raw_title)
             if not companies:
-                print("  No contractor found in article. Skipping.")
                 continue
 
             for company in companies:
-                print(
-                    f"  CONTRACTOR: {company.company_name}"
-                    f" | Score: {company.ai_score}"
-                )
+                if await check_company_exists(company.company_name):
+                    print(f"  -> Skipping duplicate: {company.company_name}")
+                    continue
+
+                print(f"  CONTRACTOR: {company.company_name} | Score: {company.ai_score}")
 
                 lead = LeadInsert(
-                    source="NEWS - Google Search",
+                    source=f"NEWS - {engine}",
                     company_name=company.company_name,
                     tender_title=company.sanitized_title,
                     url=real_url,
                     ai_score=company.ai_score,
                     ai_summary=company.summary,
-                    full_content=text[:MAX_ARTICLE_CHARS],
+                    full_content=text_content[:MAX_ARTICLE_CHARS],
                     nip=company.nip,
                     status="processed",
                 )
+
+                metadata = await enrich_company_metadata(company.company_name)
+                lead.website = metadata.website
+                lead.linkedin_url = metadata.linkedin_url
+
                 success = await insert_lead(lead)
                 if success:
-                    nip_str = (
-                        f" (NIP: {company.nip})" if company.nip else ""
-                    )
-                    print(
-                        f"  -> Saved: {company.company_name}"
-                        f"{nip_str}"
-                    )
-                else:
-                    print(
-                        f"  -> Failed to save {company.company_name}"
-                        " (duplicate?)"
-                    )
+                    print(f"  -> Saved: {company.company_name}")
 
-    print("\n=== Google News Scraper Completed ===")
+    print("\n=== News Scraper Cascade Completed ===")
 
 
 if __name__ == "__main__":

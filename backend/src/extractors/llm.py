@@ -1,7 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import Optional
 from google import genai
-import json
 from src.core.config import config
 
 
@@ -59,93 +58,150 @@ class ExtractionResult(BaseModel):
     )
 
 
-SYSTEM_PROMPT = """Jestes ekspertem ds. generowania leadow B2B dla firmy handlowej.
-Twoje zadanie: z artykulu prasowego lub opisu przetargu WYCIAGNIJ NAZWY FIRM WYKONAWCOW.
-
-WYKONAWCA to firma, ktora:
-- WYGRALA przetarg lub konkurs ofert
-- PODPISALA umowe na realizacje
-- DOSTARCZA produkt lub usluge (np. autobusy, sprzet, materialy)
-- BUDUJE, MODERNIZUJE, REALIZUJE projekt
-
-NIE INTERESUJA NAS:
-- Zamawiajacy (gminy, urzedy, ministerstwa, PKP, GDDKiA - to KLIENCI, nie leady)
-- Artykuly newsowe bez konkretnych firm wykonawczych
-- Spekulacje, prognozy, plany bez podanej firmy realizujacej
-
-ZASADY:
-1. Jesli artykul mowi 'Budimex podpisal umowe na budowe terminalu' -> company_name='Budimex S.A.'
-2. Jesli artykul mowi 'Miasto planuje budowe drogi' (bez wykonawcy) -> zwroc PUSTA liste
-3. Zawsze podaj PELNA nazwe firmy z forma prawna (S.A., Sp. z o.o.) jesli znana
-4. Jesli znajdziesz NIP w tekscie - wyciagnij go
-5. ABSOLUTNIE NIE ZWRACAJ WARTOSCI typu 'Inwestor', 'Przyszły', 'Odrzucony', 'Kryptowaluty', 'Znana'. Jesli nie ma prawdziwej firmy uzywajacej formy prawnej lub jawnej nazwy komercyjnej wykonawcy, ZWROC PUSTA LISTE."""
+class RawEntity(BaseModel):
+    name: str = Field(
+        description="Pełna nazwa podmiotu z tekstu (firmy, gminy, urzędu, inwestora)."
+    )
+    role: str = Field(
+        description="Rola podmiotu w tekście (np. wykonawca, inwestor, zamawiający, organ dotujący)."
+    )
+    nip: Optional[str] = Field(default=None)
+    context_sentence: str = Field(
+        description="Zdanie z tekstu potwierdzające rolę podmiotu."
+    )
 
 
-async def extract_companies(
-    text: str, raw_title: str = ""
-) -> list[CompanyExtraction]:
-    """Extract contractor/executor companies from article text using Gemini 2.5 Flash."""
+class ExtractorResponse(BaseModel):
+    entities: list[RawEntity] = Field(
+        description="Lista wszystkich istotnych podmiotów wspomnianych w artykule (zarówno inwestorów jak i wykonawców)."
+    )
+
+
+class FilterDecision(BaseModel):
+    entity_name: str
+    is_b2b_lead: bool = Field(
+        description="TRUE jeśli podmiot to firma komercyjna, która ZARABIA / OTRZYMUJE zlecenie / ZOSTAŁA WYBRANA. FALSE jeśli to instytucja publiczna, zamawiający, skarb państwa, gmina, inwestor płacący."
+    )
+    reasoning: str = Field(description="Krótkie uzasadnienie decyzji.")
+    sanitized_title: str = Field(
+        description="Tytuł zlecenia (tylko w przypadku is_b2b_lead=True). Inaczej puste."
+    )
+    summary: str = Field(
+        description="Krótkie podsumowanie zlecenia (tylko w przypadku is_b2b_lead=True). Inaczej puste."
+    )
+    ai_score: int = Field(
+        default=0, description="Ocena 1-10 (tylko w przypadku is_b2b_lead=True)."
+    )
+
+
+class FilterResponse(BaseModel):
+    decisions: list[FilterDecision]
+
+
+EXTRACTOR_PROMPT = """Jesteś analitykiem biznesowym. Twoim zadaniem jest znalezienie WSZYSTKICH podmiotów (firm, miast, urzędów, spółek) w artykule prasowym i zidentyfikowanie ich roli (np. Inwestor, Wykonawca, Podwykonawca, Zamawiający, Gmina). Zwróć wszystkie zidentyfikowane podmioty wraz z ich NIP i rolą."""
+
+FILTER_PROMPT = """Otrzymujesz listę podmiotów i ról wyciągniętych z artykułu prasowego.
+Twoim zadaniem jest zdecydować o Kwalifikacji Leada (is_b2b_lead).
+
+KRYTERIA (is_b2b_lead=True):
+- Podmiot to firma, która Wygrała przetarg, Została zatrudniona, Otrzyma zlecenie, Buduje obiekt. ZARABIA.
+
+KRYTERIA ODRZUCENIA (is_b2b_lead=False):
+- Gminy, Urzędy, Powiaty, Ministerstwa, GDDKiA, PKP, szpitale (ZAMAWIAJĄCY/KLIENCI).
+- Inwestorzy, którzy PŁACĄ za inwestycję.
+
+Jeśli is_b2b_lead=True, wypełnij `sanitized_title`, `summary` (1 zdanie) i `ai_score` (1-10)."""
+
+
+async def extract_companies(text: str, raw_title: str = "") -> list[CompanyExtraction]:
+    """Extract contractor/executor companies from article text using 2-stage AI process."""
     if not text or len(text.strip()) < 50:
         return []
 
-    prompt = f"""ANALIZUJ PONIZSZY TEKST. Wyciagnij WSZYSTKIE firmy WYKONAWCOW (zleceniobiorcow).
+    # --- STAGE 1: EXTRACT ALL ENTITIES ---
+    ext_prompt = (
+        f"Zidentyfikuj podmioty.\n\nTytuł: {raw_title}\n\nTekst:\n{text[:8000]}"
+    )
+    raw_entities = []
 
-Tytul artykulu: {raw_title}
-
-Tresc:
-{text[:8000]}
-
-Zwroc ustrukturyzowany JSON zgodny ze schematem: {ExtractionResult.model_json_schema()}
-Jesli nie ma zadnej firmy wykonawcy - zwroc {{"companies": []}}"""
-
-    # --- GEMINI 2.5 FLASH (Primary) ---
     if config.GEMINI_API_KEY:
         try:
             client = genai.Client(api_key=config.GEMINI_API_KEY)
-            response = client.models.generate_content(
+            resp_ext = client.models.generate_content(
                 model=config.GEMINI_MODEL_ID,
-                contents=prompt,
+                contents=ext_prompt,
                 config=genai.types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    response_schema=ExtractionResult,
-                    temperature=0.1,
-                    system_instruction=SYSTEM_PROMPT,
+                    response_schema=ExtractorResponse,
+                    temperature=0.0,
+                    system_instruction=EXTRACTOR_PROMPT,
                 ),
             )
-            if response.parsed and isinstance(response.parsed, ExtractionResult):
-                # Filter out empty company names
-                valid = [
-                    c for c in response.parsed.companies
-                    if c.company_name and c.company_name.strip()
-                ]
-                return valid
+            if resp_ext.parsed and isinstance(resp_ext.parsed, ExtractorResponse):
+                raw_entities = resp_ext.parsed.entities
         except Exception as e:
-            print(f"Blad Gemini 2.5 Flash: {e}. Fallback to Anthropic...")
+            print(f"Error w Etapie 1 (Gemini): {e}")
 
-    # --- ANTHROPIC (Fallback) ---
-    if config.ANTHROPIC_API_KEY:
+    if not raw_entities:
+        return []
+
+    # --- STAGE 2: FILTER & VERIFY ---
+    entities_description = "\n".join(
+        [
+            f"- {e.name} (NIP: {e.nip}) | Rola: {e.role} | Kontekst: {e.context_sentence}"
+            for e in raw_entities
+        ]
+    )
+
+    from datetime import datetime
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    
+    filter_prompt = f"""Obecna data to {current_date}. Na podstawie podanej listy podmiotów oraz tytułu, przefiltruj je na B2B Leady. Odpowiedz listą decyzji.
+UWAGA: Jeśli tekst wyraźnie opisuje wydarzenia, które miały miejsce w latach 2018-2025 (stare wiadomości), kategorycznie odrzuć podmiot (is_b2b_lead=False) z uzasadnieniem: "Zbyt stary artykuł".
+
+Tytuł: {raw_title}
+Podmioty:
+{entities_description}"""
+
+    decisions = []
+    if config.GEMINI_API_KEY:
         try:
-            from anthropic import AsyncAnthropic
-
-            anthropic_client = AsyncAnthropic(
-                api_key=config.ANTHROPIC_API_KEY
+            client = genai.Client(api_key=config.GEMINI_API_KEY)
+            resp_filter = client.models.generate_content(
+                model=config.GEMINI_MODEL_ID,
+                contents=filter_prompt,
+                config=genai.types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=FilterResponse,
+                    temperature=0.0,
+                    system_instruction=FILTER_PROMPT,
+                ),
             )
-            response = await anthropic_client.messages.create(
-                model="claude-3-5-sonnet-20240620",
-                max_tokens=2000,
-                system=SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            content = response.content[0].text
-            json_start = content.find("{")
-            json_end = content.rfind("}") + 1
-            parsed = json.loads(content[json_start:json_end])
-            results = [
-                CompanyExtraction(**c)
-                for c in parsed.get("companies", [])
-            ]
-            return [r for r in results if r.company_name.strip()]
+            if resp_filter.parsed and isinstance(resp_filter.parsed, FilterResponse):
+                decisions = resp_filter.parsed.decisions
         except Exception as e:
-            print(f"Blad Anthropic (Fallback): {e}")
+            print(f"Error w Etapie 2 (Gemini): {e}")
 
-    return []
+    # --- MAP TO OUTPUT ---
+    final_companies = []
+
+    for decision in decisions:
+        if decision.is_b2b_lead:
+            # find original entity to get nip if any
+            nip = None
+            for entity in raw_entities:
+                if entity.name == decision.entity_name:
+                    nip = entity.nip
+                    break
+
+            final_companies.append(
+                CompanyExtraction(
+                    company_name=decision.entity_name,
+                    nip=nip,
+                    sanitized_title=decision.sanitized_title or raw_title,
+                    summary=decision.summary or decision.reasoning,
+                    ai_score=decision.ai_score or 7,
+                )
+            )
+
+    return final_companies

@@ -4,8 +4,8 @@ from dotenv import load_dotenv
 
 # Try to load from various potential locations
 load_dotenv(dotenv_path=Path(__file__).parent.parent.parent / ".env")
-load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env") # backend root
-load_dotenv() # current dir
+load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")  # backend root
+load_dotenv()  # current dir
 
 
 class Config:
@@ -20,6 +20,11 @@ class Config:
     GMAIL_SENDER = os.getenv("GMAIL_SENDER", "")
     GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "")
     NOTIFICATION_EMAILS = os.getenv("NOTIFICATION_EMAILS", "").split(",")
+    CC_EMAILS = [
+        email.strip()
+        for email in os.getenv("CC_EMAILS", "").split(",")
+        if email.strip()
+    ]
 
     # Default search keywords if not overridden
     PRACUJ_KEYWORDS = os.getenv(
